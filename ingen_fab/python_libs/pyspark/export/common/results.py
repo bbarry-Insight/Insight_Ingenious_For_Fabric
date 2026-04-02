@@ -30,7 +30,7 @@ class ExportMetrics:
 class ExportResult:
     """Result of an export operation."""
 
-    export_group_name: str
+    export_run_id: str
     export_name: str
     status: ExecutionStatus = ExecutionStatus.PENDING
     metrics: ExportMetrics = field(default_factory=ExportMetrics)
@@ -47,7 +47,7 @@ class ExportResult:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
-            "export_group_name": self.export_group_name,
+            "export_run_id": self.export_run_id,
             "export_name": self.export_name,
             "status": str(self.status),
             "metrics": self.metrics.to_dict(),

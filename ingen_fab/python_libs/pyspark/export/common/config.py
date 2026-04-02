@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ingen_fab.python_libs.pyspark.export.common.constants import (
@@ -129,8 +130,10 @@ class ExportSourceConfig:
 class ExportConfig:
     """Full export configuration."""
 
-    export_group_name: str
     export_name: str
+    export_group_name: str
+    export_dbt_model_name: str
+    export_schedule: Dict[str,str]
     is_active: bool
     execution_group: int
 
@@ -282,6 +285,8 @@ class ExportConfig:
         return cls(
             export_group_name=row.get("export_group_name", ""),
             export_name=row.get("export_name", ""),
+            export_dbt_model_name=row.get("export_dbt_model_name", ""),
+            export_schedule=row.get("export_schedule", ""),
             is_active=row.get("is_active", True),
             execution_group=row.get("execution_group", 1),
             source_config=source_config,
@@ -300,3 +305,12 @@ class ExportConfig:
             period_date_query=row.get("period_date_query"),
             description=row.get("description"),
         )
+
+@dataclass
+class ExportRunConfig:
+    export_run_id: str
+    export_config: ExportConfig 
+    export_execution_id: Optional[str] = None
+    export_start_time: Optional[datetime] = None
+    export_run_date: Optional[str] = None,
+    timezone: str = "Australia/Sydney"

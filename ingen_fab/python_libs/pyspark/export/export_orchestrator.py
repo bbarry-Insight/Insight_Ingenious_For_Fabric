@@ -8,13 +8,14 @@ import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-from ingen_fab.python_libs.pyspark.export.common.config import ExportConfig
+from ingen_fab.python_libs.pyspark.export.common.config import ExportConfig, ExportRunConfig
 from ingen_fab.python_libs.pyspark.export.common.constants import ExecutionStatus
 from ingen_fab.python_libs.pyspark.export.common.param_resolver import (
     Params,
@@ -65,11 +66,11 @@ class ExportOrchestrator:
 
     def _get_unique_target_lakehouses(
         self,
-        configs: List[ExportConfig]
+        configs: List[ExportRunConfig]
     ) -> Set[Tuple[str, str]]:
         """Get unique (workspace, lakehouse) pairs from configs."""
         return {
-            (c.target_workspace, c.target_lakehouse)
+            (c.export_config.target_workspace, c.export_config.target_lakehouse)
             for c in configs
         }
 
@@ -125,41 +126,40 @@ class ExportOrchestrator:
 
     def process_exports(
         self,
-        configs: List[ExportConfig],
-        execution_id: str = None,
+        configs: List[ExportRunConfig],
         is_retry: bool = False,
-        run_date: Optional[str] = None,
-        timezone: str = "Australia/Sydney",
     ) -> Dict[str, Any]:
         """
         Process multiple export configurations.
 
         Args:
-            configs: List of ExportConfig objects
-            execution_id: Unique execution identifier (generated if not provided)
-            is_retry: If True, only process failed exports
-            run_date: Date/datetime string (ISO format). Defaults to today in timezone.
-            timezone: Timezone for default run_date (e.g., "Australia/Sydney", "UTC")
+            configs: List of ExportRunConfig objects
+            is_retry: retry failed exports
 
         Returns:
             Dictionary with execution summary
         """
-        execution_id = execution_id or str(uuid.uuid4())
-        tz = ZoneInfo(timezone)
+
+        # store runconfigs that are shared between exports
+        default_config = configs[0]
+        execution_id = default_config.export_execution_id
+        run_date = default_config.export_run_date
+        # Store timezone for passing to file writer
+        self._timezone = default_config.timezone
+
+        tz = ZoneInfo(default_config.timezone)
+
         if run_date:
             effective_run_date = datetime.fromisoformat(run_date)
         else:
             effective_run_date = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Store timezone for passing to file writer
-        self._timezone = timezone
-
         # Filter to failed configs if retry mode
         if is_retry:
             failed_keys = self.export_logger.get_failed_export_keys(
-                [(c.export_group_name, c.export_name) for c in configs]
+                [(c.export_group_name, c.export_name) for c in configs.export_configs]
             )
-            configs = [c for c in configs if (c.export_group_name, c.export_name) in failed_keys]
+            configs = [c for c in configs.export_configs if (c.export_group_name, c.export_name) in failed_keys]
             self.logger.info(f"Retry mode: processing {len(configs)} failed exports")
 
         results = {
@@ -179,8 +179,8 @@ class ExportOrchestrator:
 
         # Group by execution_group
         execution_groups = defaultdict(list)
-        for config in configs:
-            execution_groups[config.execution_group].append(config)
+        for run in configs:
+            execution_groups[run.export_config.execution_group].append(run)
 
         # Mount unique target lakehouses once (before processing)
         unique_targets = self._get_unique_target_lakehouses(configs)
@@ -222,7 +222,7 @@ class ExportOrchestrator:
 
     def _process_group_parallel(
         self,
-        configs: List[ExportConfig],
+        configs: List[ExportRunConfig],
         execution_id: str,
         group_num: int,
         run_date: datetime,
@@ -232,7 +232,6 @@ class ExportOrchestrator:
 
         Args:
             configs: Export configurations in this group
-            execution_id: Master execution ID
             group_num: Execution group number
             run_date: Datetime for filename patterns
             mount_paths: Dict mapping (workspace, lakehouse) -> mount_path
@@ -242,7 +241,7 @@ class ExportOrchestrator:
         if len(configs) == 1:
             # Single export - no need for threading
             config = configs[0]
-            mount_path = mount_paths[(config.target_workspace, config.target_lakehouse)]
+            mount_path = mount_paths[(config.export_config.target_workspace, config.export_config.target_lakehouse)]
             result = self.process_single_export(config, execution_id, run_date, mount_path)
             results = [result]
         else:
@@ -257,7 +256,7 @@ class ExportOrchestrator:
                         config,
                         execution_id,
                         run_date,
-                        mount_paths[(config.target_workspace, config.target_lakehouse)]
+                        mount_paths[(config.export_config.target_workspace, config.export_config.target_lakehouse)]
                     ): config
                     for config in configs
                 }
@@ -281,7 +280,7 @@ class ExportOrchestrator:
 
     def process_single_export(
         self,
-        config: ExportConfig,
+        run_config: ExportRunConfig,
         execution_id: str,
         run_date: datetime,
         mount_path: str,
@@ -290,27 +289,27 @@ class ExportOrchestrator:
         Process a single export configuration.
 
         Args:
-            config: Export configuration
-            execution_id: Master execution ID
+            run_config: Configuration of export on this run
             run_date: Datetime for filename patterns
             mount_path: Path to mounted target lakehouse
 
         Returns:
             ExportResult with status and metrics
         """
-        start_time = time.time()
-        export_run_id = str(uuid.uuid4())
-        started_at = datetime.utcnow()
+
+        # split static config from overall run_config
+        config = run_config.export_config
+
+        started_at = run_config.export_start_time
+        start_time = started_at.timestamp()
 
         result = ExportResult(
-            export_group_name=config.export_group_name,
+            export_run_id=run_config.export_run_id,
             export_name=config.export_name,
             status=ExecutionStatus.PENDING,
             started_at=started_at,
         )
 
-        # Log start
-        self.export_logger.log_export_start(config, execution_id, export_run_id)
 
         try:
             self.logger.info(f"Starting export: {config.export_name}")
@@ -365,7 +364,7 @@ class ExportOrchestrator:
 
             # 6. Write to files (using filtered output_df, not original df)
             # Pass row_count to avoid second DataFrame scan
-            write_result = file_writer.write(output_df, export_run_id, row_count=row_count)
+            write_result = file_writer.write(output_df, run_config.export_run_id, row_count=row_count)
 
             if not write_result.success:
                 raise Exception(write_result.error_message)
@@ -392,11 +391,11 @@ class ExportOrchestrator:
             )
 
             # Log completion
-            self.export_logger.log_export_completion(config, execution_id, export_run_id, result)
+            self.export_logger.log_export_completion(run_config, result)
 
             # 8. Update watermark for incremental exports (using original df with incremental_column)
             if config.extract_type == "incremental" and config.incremental_column:
-                self._update_export_watermark(df, config, export_run_id)
+                self._update_export_watermark(df, config, run_config.export_run_id)
 
         except Exception as e:
             end_time = time.time()
@@ -408,7 +407,7 @@ class ExportOrchestrator:
             result.completed_at = datetime.utcnow()
 
             self.logger.exception(f"Export {config.export_name} failed: {e}")
-            self.export_logger.log_export_error(config, execution_id, export_run_id, str(e), result)
+            self.export_logger.log_export_error(config, execution_id, run_config.export_run_id, str(e), result)
 
         return result
 
