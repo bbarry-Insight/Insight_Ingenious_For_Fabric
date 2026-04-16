@@ -62,7 +62,7 @@ class ConfigExportManager:
 
     def get_configs(
         self,
-        export_name: str,
+        export_identifiers: List[str],
         execution_group: Optional[int] = None,
         active_only: bool = True,
     ) -> List[ExportConfig]:
@@ -70,7 +70,7 @@ class ConfigExportManager:
         Get export configurations from the config table.
 
         Args:
-            export_name: Required. Filter by export group name.
+            export_identifiers: Required. List of export_names/export_group_names. Returns all configs of which are contained in this list.
             execution_group: Optional filter by execution group number.
             active_only: If True, only return active configurations.
 
@@ -81,8 +81,8 @@ class ConfigExportManager:
             ValueError: If export_group_name is not provided.
             ConfigValidationError: If any configs fail validation, with details of all failures.
         """
-        if not export_name:
-            raise ValueError("export_name is required")
+        if not export_identifiers:
+            raise ValueError("export_identifiers are required")
 
         df = self.config_lakehouse.read_table(table_name=self.CONFIG_TABLE_NAME)
 
@@ -93,18 +93,55 @@ class ConfigExportManager:
         if execution_group is not None:
             df = df.filter(F.col("execution_group") == execution_group)
         
-        # Filter for given export name
-        export_row = df.filter(F.col("export_name") == export_name)
-
-        # Check if export in group, if so, return all configs for that group
-        export_group = export_row.select("export_group_name").first()["export_group_name"]
-        if export_group is not None:
-            df = df.filter(F.col("export_group_name") == export_group)
-        else:
-            df = export_row
+        # Filter for given export identifier
+        df = df.filter(
+            F.col("export_name").isin(export_identifiers) | F.col("export_group_name").isin(export_identifiers)
+        )
 
         # Order by execution_group for proper processing order
         df = df.orderBy("execution_group", "export_name")
+
+        configs = []
+        errors = []
+        for row in df.collect():
+            try:
+                config = ExportConfig.from_row(row.asDict())
+                configs.append(config)
+            except Exception as e:
+                errors.append(f"  - {row.export_name}: {e}")
+
+        # Raise if any configs failed validation
+        if errors:
+            error_list = "\n".join(errors)
+            raise ConfigValidationError(
+                f"Failed to load {len(errors)} export config(s):\n{error_list}"
+            )
+
+        self.logger.info(f"Loaded {len(configs)} export configurations")
+        return configs
+
+    def get_all_configs(
+        self,
+        active_only: bool = True,
+    ) -> List[ExportConfig]:
+        """
+        Get all export configurations from the config table.
+
+        Args:
+            active_only: If True, only return active configurations.
+
+        Returns:
+            List of ExportConfig objects
+
+        Raises:
+            ConfigValidationError: If any configs fail validation, with details of all failures.
+        """
+
+        df = self.config_lakehouse.read_table(table_name=self.CONFIG_TABLE_NAME)
+
+        # Apply filters
+        if active_only:
+            df = df.filter(F.col("is_active") == True)  # noqa: E712 - PySpark requires explicit comparison
 
         configs = []
         errors = []

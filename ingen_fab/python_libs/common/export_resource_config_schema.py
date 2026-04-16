@@ -24,9 +24,14 @@ def get_config_export_resource_schema() -> StructType:
     return StructType(
         [
             # Primary identifiers (composite key)
-            StructField("export_group_name", StringType(), False),
             StructField("export_name", StringType(), False),
+            StructField("export_dbt_model_name", StringType(), False),
+            StructField("export_group_name", StringType(), True),
             StructField("execution_group", IntegerType(), False),
+            # Schedule configuration
+            StructField("export_schedule_category", IntegerType(), True),
+            StructField("export_schedule_runtime", IntegerType(), True),
+            StructField("export_schedule_runday", IntegerType(), True),
             # Source configuration
             StructField("source_type", StringType(), False),  # "lakehouse" or "warehouse"
             StructField("source_workspace", StringType(), False),
@@ -81,8 +86,8 @@ def get_log_resource_export_schema() -> StructType:
             # Primary identifiers
             StructField("export_run_id", StringType(), False),
             StructField("master_execution_id", StringType(), False),
-            StructField("export_group_name", StringType(), False),
             StructField("export_name", StringType(), False),
+            StructField("export_group_name", StringType(), True),
             # Execution state
             StructField(
                 "export_state", StringType(), False

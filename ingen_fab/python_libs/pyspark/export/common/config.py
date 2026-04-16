@@ -133,7 +133,9 @@ class ExportConfig:
     export_name: str
     export_group_name: str
     export_dbt_model_name: str
-    export_schedule: Dict[str,str]
+    export_schedule_category: int
+    export_schedule_runtime: int
+    export_schedule_runday: int
     is_active: bool
     execution_group: int
 
@@ -286,7 +288,9 @@ class ExportConfig:
             export_group_name=row.get("export_group_name", ""),
             export_name=row.get("export_name", ""),
             export_dbt_model_name=row.get("export_dbt_model_name", ""),
-            export_schedule=row.get("export_schedule", ""),
+            export_schedule_category=row.get("export_schedule_category", ""),
+            export_schedule_runtime=row.get("export_schedule_runtime", ""),
+            export_schedule_runday=row.get("export_schedule_runday", ""),
             is_active=row.get("is_active", True),
             execution_group=row.get("execution_group", 1),
             source_config=source_config,
