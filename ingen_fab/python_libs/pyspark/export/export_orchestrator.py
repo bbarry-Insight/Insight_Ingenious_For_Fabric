@@ -407,7 +407,7 @@ class ExportOrchestrator:
             result.completed_at = datetime.utcnow()
 
             self.logger.exception(f"Export {config.export_name} failed: {e}")
-            self.export_logger.log_export_error(config, execution_id, run_config.export_run_id, str(e), result)
+            self.export_logger.log_export_error(run_config, str(e), result)
 
         return result
 
